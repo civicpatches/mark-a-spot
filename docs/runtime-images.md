@@ -66,7 +66,22 @@ in-stack `mailpit:1025` endpoint.
 
 Set `MARKASPOT_CRON_ENABLED=true` on exactly one Drupal container to run Drush
 cron. The optional `MARKASPOT_CRON_INTERVAL` is expressed in seconds and
-defaults to 900. Accepted values range from 60 to 86400.
+defaults to 900. Accepted values range from 60 to 86400. A failed cron run is
+logged as `Drupal cron failed (exit N); next attempt in S seconds`, where `N`
+is the Drush exit code and `S` the configured interval.
+
+The same switch starts the media intake runner. It runs
+`drush queue:run markaspot_media_intake --time-limit=50 --lease-time=900`
+once a minute, so images imported through GeoReport `media_url` or inbound
+mail are screened within about a minute instead of at the next cron run. On a
+profile without that queue worker the runner stays paused, logs
+`Media intake worker not installed` once and checks again every 15 minutes.
+
+Both loops start only when the container command is `php-fpm`, the image
+default. One-off containers that run another command, such as
+`drush deploy` or `drush updatedb`, never start them, even with
+`MARKASPOT_CRON_ENABLED=true` in their environment. Both loops write
+their output to the container log.
 
 ## Tenant images
 
