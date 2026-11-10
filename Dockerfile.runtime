@@ -97,6 +97,10 @@ COPY --from=builder /app/data /app/data
 COPY docker/runtime/settings.php /app/data/web/sites/default/settings.php
 COPY docker/runtime/docker-entrypoint.sh /usr/local/bin/markaspot-entrypoint
 
+# session.upload_progress.enabled=0 is the mitigation PHP recommends for
+# CVE-2026-115560 (no patched release yet). Drupal's upload progress bar uses
+# the PECL uploadprogress extension, not session upload progress, so turning
+# it off changes nothing for the application.
 RUN chmod 0755 /usr/local/bin/markaspot-entrypoint \
     && mkdir -p \
         /app/data/private \
@@ -119,6 +123,7 @@ RUN chmod 0755 /usr/local/bin/markaspot-entrypoint \
         echo 'opcache.enable_cli=1'; \
         echo 'opcache.memory_consumption=128'; \
         echo 'sendmail_path=/usr/bin/msmtp -t -C /tmp/msmtprc'; \
+        echo 'session.upload_progress.enabled=0'; \
     } > /usr/local/etc/php/conf.d/zz-markaspot-runtime.ini
 
 WORKDIR /app/data
