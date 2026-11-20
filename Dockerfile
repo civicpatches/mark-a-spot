@@ -11,6 +11,7 @@ RUN apk update && apk upgrade --no-cache
 # Install minimum required extensions and dependencies for Drupal (build-time)
 RUN apk add --no-cache \
         git \
+        patch \
         curl \
         mariadb-client \
         libzip-dev \
