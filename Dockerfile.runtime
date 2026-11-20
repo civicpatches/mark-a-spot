@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1.7
 
-ARG PHP_IMAGE=php:8.4.27-fpm-alpine@sha256:8193f7c711715c88452ebe51d4ee7769172a3fa917446a8820cf84192da2c555
+ARG PHP_IMAGE=php:8.4.28-fpm-alpine@sha256:1c3d5f8dd7f56ae38dfaf33934c7d5f326d5291b611df1e3ea18a332d8ef9407
 ARG COMPOSER_IMAGE=composer:2.10.1@sha256:7725eb4545c438629ae8bde3ef0bb9a5038ef566126ad878442a69007242d267
 ARG REDIS_VERSION=6.3.0
 # phpredis comes from the GitHub release tarball with a pinned checksum:
