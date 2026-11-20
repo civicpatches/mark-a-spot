@@ -13,6 +13,7 @@ on:
       - patches/**
       - web/**
       - scripts/check-runtime-images.sh
+      - scripts/test-runtime-entrypoint.sh
       - .github/workflows/runtime-image.yml
       - docs/runtime-images.md
   push:
@@ -31,6 +32,7 @@ on:
       - patches/**
       - web/**
       - scripts/check-runtime-images.sh
+      - scripts/test-runtime-entrypoint.sh
       - .github/workflows/runtime-image.yml
       - docs/runtime-images.md
   workflow_dispatch:
@@ -57,6 +59,10 @@ jobs:
         run: docker run --rm -i php:8.4-fpm-alpine@sha256:5992f8b7433fe7fa96dfbf67746c86d6c41bc91e686eac38fe531c72a02e40e4 php -l /dev/stdin < docker/runtime/settings.php
       - name: Check Mark-a-Spot runtime contract
         run: SKIP_PHP_LINT=1 ./scripts/check-runtime-images.sh
+      - name: Test runtime entrypoint loops with dash
+        run: sh scripts/test-runtime-entrypoint.sh
+      - name: Test runtime entrypoint loops with BusyBox ash
+        run: docker run --rm --user 1000:1000 --network none --volume "$PWD:/src:ro" --workdir /src php:8.4-fpm-alpine@sha256:5992f8b7433fe7fa96dfbf67746c86d6c41bc91e686eac38fe531c72a02e40e4 sh scripts/test-runtime-entrypoint.sh
 
   pr_images:
     if: github.event_name == 'pull_request'

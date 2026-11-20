@@ -1,14 +1,18 @@
 # syntax=docker/dockerfile:1.7
 
-ARG PHP_IMAGE=php:8.4-fpm-alpine@sha256:5992f8b7433fe7fa96dfbf67746c86d6c41bc91e686eac38fe531c72a02e40e4
+ARG PHP_IMAGE=php:8.4.28-fpm-alpine@sha256:1c3d5f8dd7f56ae38dfaf33934c7d5f326d5291b611df1e3ea18a332d8ef9407
 ARG COMPOSER_IMAGE=composer:2.10.1@sha256:7725eb4545c438629ae8bde3ef0bb9a5038ef566126ad878442a69007242d267
 ARG REDIS_VERSION=6.3.0
+# phpredis comes from the GitHub release tarball with a pinned checksum:
+# pecl.php.net answered HTTP 500 under load on 2026-10-21.
+ARG REDIS_SHA256=cb8f81df1a275599e4f8ddcfec7e1f65ed1953e6f5673649149fd680ebff4cad
 
 FROM ${COMPOSER_IMAGE} AS composer
 
 FROM ${PHP_IMAGE} AS builder
 
 ARG REDIS_VERSION
+ARG REDIS_SHA256
 
 COPY --from=composer /usr/bin/composer /usr/local/bin/composer
 RUN apk add --no-cache \
@@ -20,7 +24,13 @@ RUN apk add --no-cache \
         libpng-dev \
         libzip-dev \
         linux-headers \
+        patch \
         unzip \
+    && mkdir -p /usr/src/php/ext/redis \
+    && curl -fsSL -o /tmp/phpredis.tar.gz https://github.com/phpredis/phpredis/archive/refs/tags/${REDIS_VERSION}.tar.gz \
+    && echo "${REDIS_SHA256}  /tmp/phpredis.tar.gz" | sha256sum -c - \
+    && tar -xzf /tmp/phpredis.tar.gz --strip-components=1 -C /usr/src/php/ext/redis \
+    && rm /tmp/phpredis.tar.gz \
     && docker-php-ext-configure gd --with-freetype --with-jpeg \
     && docker-php-ext-install -j"$(getconf _NPROCESSORS_ONLN)" \
         exif \
@@ -28,8 +38,8 @@ RUN apk add --no-cache \
         intl \
         pdo_mysql \
         zip \
-    && pecl install redis-${REDIS_VERSION} \
-    && docker-php-ext-enable redis
+        redis \
+    && docker-php-source delete
 
 WORKDIR /app/data
 
@@ -87,6 +97,10 @@ COPY --from=builder /app/data /app/data
 COPY docker/runtime/settings.php /app/data/web/sites/default/settings.php
 COPY docker/runtime/docker-entrypoint.sh /usr/local/bin/markaspot-entrypoint
 
+# session.upload_progress.enabled=0 is the mitigation PHP recommends for
+# CVE-2026-115560 (no patched release yet). Drupal's upload progress bar uses
+# the PECL uploadprogress extension, not session upload progress, so turning
+# it off changes nothing for the application.
 RUN chmod 0755 /usr/local/bin/markaspot-entrypoint \
     && mkdir -p \
         /app/data/private \
@@ -109,6 +123,7 @@ RUN chmod 0755 /usr/local/bin/markaspot-entrypoint \
         echo 'opcache.enable_cli=1'; \
         echo 'opcache.memory_consumption=128'; \
         echo 'sendmail_path=/usr/bin/msmtp -t -C /tmp/msmtprc'; \
+        echo 'session.upload_progress.enabled=0'; \
     } > /usr/local/etc/php/conf.d/zz-markaspot-runtime.ini
 
 WORKDIR /app/data

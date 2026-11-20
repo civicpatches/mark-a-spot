@@ -132,11 +132,92 @@ if [ "$cron_enabled" = "true" ]; then
     echo "ERROR: MARKASPOT_CRON_INTERVAL must be an integer from 60 to 86400" >&2
     exit 1
   fi
+fi
+
+# The background loops belong to the long-lived PHP-FPM container only. One-off
+# containers (drush deploy, updatedb, migrations) share its environment and
+# must never run cron or queue workers next to the command they were started
+# for. The loops inherit the entrypoint's stdout and stderr, which remain the
+# container log after the exec below. Writing to /proc/1/fd/1 would not work:
+# PID 1 runs as root and the loops run as the app user.
+if [ "$cron_enabled" = "true" ] && [ "${1:-}" = "php-fpm" ]; then
+  # A failed run is named with its exit code instead of being swallowed, so a
+  # stale cron shows up in the container log. Keep the "Drupal cron failed"
+  # prefix stable: log monitoring matches on it.
+  # Expand loop variables in the child shell, not in the entrypoint shell.
+  # shellcheck disable=SC2016
   run_as_app env MARKASPOT_CRON_INTERVAL="$cron_interval" sh -lc '
     while true; do
       sleep "$MARKASPOT_CRON_INTERVAL"
-      cd /app/data
-      ./vendor/bin/drush cron || true
+      cron_exit=0
+      (cd /app/data && ./vendor/bin/drush cron) || cron_exit=$?
+      if [ "$cron_exit" -ne 0 ]; then
+        printf "Drupal cron failed (exit %s); next attempt in %s seconds\n" "$cron_exit" "$MARKASPOT_CRON_INTERVAL" >&2
+      fi
+    done
+  ' &
+
+  # Screen imported images (GeoReport media_url, inbound mail) within about a
+  # minute instead of waiting for the next cron run. Profiles without the
+  # markaspot_media_intake queue worker keep the runner paused: it probes on
+  # the first pass and every 15 passes, so a later module installation needs
+  # no container restart. The lease time of 900 seconds keeps a claimed item
+  # away from Drupal cron while this runner processes it.
+  # shellcheck disable=SC2016
+  run_as_app sh -lc '
+    probe_tick=0
+    worker_available=false
+    probe_failure_logged=false
+    worker_missing_logged=false
+    sleep 60
+    while true; do
+      started=$(date +%s)
+      if [ "$probe_tick" -eq 0 ]; then
+        # Drush 13 reports any exit() inside php:eval as "terminated
+        # abnormally" with exit 1, so the probe answers on stdout instead.
+        # Available means exit 0 AND the marker; anything else keeps the
+        # worker paused.
+        probe_exit=0
+        probe_output=$(cd /app/data && ./vendor/bin/drush php:eval "echo \\Drupal::service(\"plugin.manager.queue_worker\")->hasDefinition(\"markaspot_media_intake\") ? \"media-intake-worker=available\" : \"media-intake-worker=missing\";" 2>&1) || probe_exit=$?
+        probe_available=false
+        probe_missing=false
+        if [ "$probe_exit" -eq 0 ]; then
+          # The eval source names both markers; missing wins so an echoed
+          # source can never read as available.
+          case "$probe_output" in
+            *media-intake-worker=missing*) probe_missing=true ;;
+            *media-intake-worker=available*) probe_available=true ;;
+          esac
+        fi
+        if [ "$probe_available" = true ]; then
+          worker_available=true
+        else
+          worker_available=false
+          if [ "$probe_missing" = true ]; then
+            if [ "$worker_missing_logged" = false ]; then
+              printf "Media intake worker not installed; next check in 15 minutes\n"
+              worker_missing_logged=true
+            fi
+          elif [ "$probe_failure_logged" = false ]; then
+            printf "Media intake worker probe failed (exit %s): %s\n" "$probe_exit" "$probe_output" >&2
+            probe_failure_logged=true
+          fi
+        fi
+      fi
+      probe_tick=$(((probe_tick + 1) % 15))
+      if [ "$worker_available" = true ]; then
+        queue_exit=0
+        (cd /app/data && ./vendor/bin/drush queue:run markaspot_media_intake --time-limit=50 --lease-time=900) || queue_exit=$?
+        if [ "$queue_exit" -ne 0 ]; then
+          printf "Media intake queue run failed (exit %s); next attempt within a minute\n" "$queue_exit" >&2
+        fi
+      fi
+      # Include processing time in the interval; a slow item must not add a
+      # further full minute before the next attempt.
+      delay=$((60 - ($(date +%s) - started)))
+      if [ "$delay" -gt 0 ]; then
+        sleep "$delay"
+      fi
     done
   ' &
 fi
